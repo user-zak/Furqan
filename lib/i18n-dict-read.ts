@@ -46,6 +46,9 @@ export const READ: Dict = {
   Quarters: { so: 'Rubuc', ar: 'الأرباع' },
   Topic: { so: 'Mawduuc', ar: 'المواضيع' },
   'Search topic': { so: 'Raadi mawduuc', ar: 'ابحث عن موضوع' },
+  'Local reciter': { so: 'Qaari deegaan', ar: 'قارئ محلي' },
+  '{count} surahs': { so: '{count} suuradood', ar: '{count} سورة' },
+  '1 surah': { so: '1 suurad', ar: 'سورة واحدة' },
   'Play ayah {key}': { so: 'Dhageyso aayadda {key}', ar: 'تشغيل الآية {key}' },
   'Topics from The Clear Quran, through QUL by Tarteel.': {
     so: 'Mawduucyada waxaa laga soo qaatay The Clear Quran, iyadoo loo marayo QUL ee Tarteel.',

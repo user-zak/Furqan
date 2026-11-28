@@ -7,7 +7,8 @@ import { cn } from '@/lib/cn'
 import { setAppSettings } from '@/lib/app-settings'
 import { tapFeedback } from '@/lib/haptics'
 import { useCloseOnBack } from '@/lib/native-back'
-import { ayahCapableReciters, getQiraat, RECITERS } from '@/lib/reciters'
+import { ayahCapableReciters, getQiraat, getReciterById, type Reciter } from '@/lib/reciters'
+import { useLocalReciters } from '@/lib/verified-reciters'
 import { lockPageScroll } from '@/lib/scroll-lock'
 import { useT } from '@/lib/i18n'
 
@@ -23,7 +24,8 @@ interface ReciterPickerProps {
 export default function ReciterPicker({ reciterId, className }: ReciterPickerProps) {
   const t = useT()
   const [open, setOpen] = useState(false)
-  const current = RECITERS.find((r) => r.id === reciterId) ?? RECITERS[0]
+  useLocalReciters()
+  const current = getReciterById(reciterId)
 
   return (
     <div className={cn('relative', className)}>
@@ -65,14 +67,16 @@ function ReciterPage({ reciterId, onClose }: { reciterId: string; onClose: () =>
     }
   }, [onClose])
 
+  const locals = useLocalReciters()
   const reciters = useMemo(() => {
     const q = query.trim().toLowerCase()
-    const all = ayahCapableReciters()
+    // The verified local qaris the admin offers in Read, first; then the well-known reciters.
+    const all: Reciter[] = [...locals.reciters.filter((r) => r.inRead), ...ayahCapableReciters()]
     if (!q) return all
     return all.filter(
       (r) => r.name.toLowerCase().includes(q) || getQiraat(r.qiraat).label.toLowerCase().includes(q) || r.style.toLowerCase().includes(q)
     )
-  }, [query])
+  }, [query, locals])
 
   const choose = (id: string) => {
     tapFeedback()
@@ -140,7 +144,9 @@ function ReciterPage({ reciterId, onClose }: { reciterId: string; onClose: () =>
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-[0.9375rem] font-semibold text-[var(--home-heading)]">{r.name}</span>
                         <span className="mt-px block truncate text-[0.78125rem] text-[var(--home-muted)]">
-                          {getQiraat(r.qiraat).short} · {r.style}
+                          {r.local
+                            ? `${t('Local reciter')} · ${(r.surahs?.length ?? 0) === 1 ? t('1 surah') : t('{count} surahs', { count: r.surahs?.length ?? 0 })}`
+                            : `${getQiraat(r.qiraat).short} · ${r.style}`}
                         </span>
                       </span>
                       {on ? <Check className="h-[18px] w-[18px] shrink-0 text-[var(--home-sage-deep)]" strokeWidth={2.6} /> : null}

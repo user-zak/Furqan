@@ -53,6 +53,8 @@ import { useBackGoesHome } from '@/hooks/useBackGoesHome'
 import { applyThemeToDocument, READING_MODES, setAppSettings, THEME_MODES } from '@/lib/app-settings'
 import { isBookmarked, toggleBookmark } from '@/lib/bookmarks'
 import { cn } from '@/lib/cn'
+import { readPlaybackReciterId } from '@/lib/reciters'
+import { useLocalReciters } from '@/lib/verified-reciters'
 import {
   clampPage,
   juzForChapter,
@@ -211,6 +213,9 @@ function ReadPageContent() {
       /* storage blocked — default mode is fine */
     }
   }, [])
+  // The verified qaris' list: Read draws again when it comes, so a chosen one (and the surahs they
+  // have recorded) is known.
+  useLocalReciters()
   const {
     reciterId,
     translationLanguage,
@@ -409,7 +414,8 @@ function ReadPageContent() {
     position: recitationPosition,
     seekTo: seekRecitation,
   } = usePageRecitation({
-      reciterId,
+      // A verified qari has recorded only some surahs: the others are read by the default reciter.
+      reciterId: readPlaybackReciterId(reciterId, Number(pageVerses[0]?.verse_key.split(':')[0]) || 0),
       verses: pageVerses,
       onPageFinished: handleRecitationPageComplete,
       onSingleVerseEnd: (verseKey) => arabicVerseEndRef.current(verseKey),

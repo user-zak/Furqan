@@ -11,6 +11,7 @@ export interface ListenQariFields {
   style?: string
   username?: string | null
   published?: boolean
+  inRead?: boolean
 }
 
 /**
@@ -47,5 +48,6 @@ export function readFields(body: Record<string, unknown>): ListenQariFields | st
   }
   if ('username' in body) out.username = text(body.username, 40).replace(/^@/, '').toLowerCase() || null
   if ('published' in body) out.published = body.published === true
+  if ('inRead' in body) out.inRead = body.inRead === true
   return out
 }

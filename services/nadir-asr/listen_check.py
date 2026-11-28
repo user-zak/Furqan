@@ -122,6 +122,27 @@ def _put(url: str, path: str) -> None:
             raise RuntimeError(f"Storage refused the file ({res.status})")
 
 
+Trim = tuple[float, float] | None
+
+
+def _bounds(db: np.ndarray, original: float, trim: Trim, silent: str) -> tuple[float, float]:
+    """
+    Where the recitation starts and ends: within the part the admin kept (`trim`, seconds into the
+    file; an end of 0 is the file's end), from just before the first sound to just after the last.
+    """
+    low = max(0.0, trim[0]) if trim else 0.0
+    high = min(original, trim[1]) if trim and trim[1] > 0 else original
+    if high - low < 1:
+        raise ValueError("The part kept is less than a second long.")
+    first = int(low / FRAME_SEC)
+    loud = np.nonzero(db[first : max(first + 1, int(high / FRAME_SEC))] > SPEECH_DB)[0]
+    if len(loud) == 0:
+        raise ValueError(silent)
+    start = max(low, (first + loud[0]) * FRAME_SEC - 0.3)
+    end = min(high, (first + loud[-1] + 1) * FRAME_SEC + 0.6)
+    return float(start), float(end)
+
+
 def _sound_report(db: np.ndarray, start: float, end: float) -> dict[str, Any]:
     first = int(start / FRAME_SEC)
     last = max(first + 1, int(end / FRAME_SEC))
@@ -147,10 +168,10 @@ def _sound_report(db: np.ndarray, start: float, end: float) -> dict[str, Any]:
         "speechToNoiseDb": round(snr, 1),
         "noise": "quiet" if snr >= 35 else "some" if snr >= 22 else "noisy",
         "longSilences": silences[:20],
-        # The original's own first and last quarter-second as loud as the recitation itself (within
-        # 15 dB): a recording that begins or stops mid-sound.
-        "startsAbruptly": bool(len(db) > edge and float(np.max(db[:edge])) > level - 15),
-        "endsAbruptly": bool(len(db) > edge and float(np.max(db[-edge:])) > level - 15),
+        # The first and last quarter-second kept as loud as the recitation itself (within 15 dB): a
+        # recording, or a trim, that begins or stops mid-sound.
+        "startsAbruptly": bool(len(inner) > edge and float(np.max(inner[:edge])) > level - 15),
+        "endsAbruptly": bool(len(inner) > edge and float(np.max(inner[-edge:])) > level - 15),
     }
 
 
@@ -196,16 +217,14 @@ def _match(samples: np.ndarray, recognizer: Any, marker: Any, progress: Callable
     return entries, heard, repeated
 
 
-def run_check(path: str, surah: int, put_url: str, recognizer: Any, marker: Any, progress: Callable[[str], None]) -> dict[str, Any]:
+def run_check(
+    path: str, surah: int, put_url: str, recognizer: Any, marker: Any, progress: Callable[[str], None], trim: Trim = None
+) -> dict[str, Any]:
     progress("Reading the file")
     samples, channels = _decode_file(path)
     original = len(samples) / SAMPLE_RATE
     db = _frame_db(samples)
-    loud_frames = np.nonzero(db > SPEECH_DB)[0]
-    if len(loud_frames) == 0:
-        raise ValueError("The recording is silent.")
-    start = max(0.0, loud_frames[0] * FRAME_SEC - 0.3)
-    end = min(original, (loud_frames[-1] + 1) * FRAME_SEC + 0.6)
+    start, end = _bounds(db, original, trim, "The recording is silent.")
 
     progress("Measuring the sound")
     loud, peak_db, peak_count = _measure(path, start, end)
@@ -285,16 +304,12 @@ def _download(url: str, path: str) -> None:
             out.write(chunk)
 
 
-def _part(path: str, surah: int, recognizer: Any, marker: Any, progress: Callable[[str], None]) -> dict[str, Any]:
+def _part(path: str, surah: int, recognizer: Any, marker: Any, progress: Callable[[str], None], trim: Trim = None) -> dict[str, Any]:
     """Where a part's recitation starts and ends, and the ayat of `surah` it holds (times from its own start)."""
     samples, _channels = _decode_file(path)
     original = len(samples) / SAMPLE_RATE
     db = _frame_db(samples)
-    loud_frames = np.nonzero(db > SPEECH_DB)[0]
-    if len(loud_frames) == 0:
-        raise ValueError("One of the parts is silent.")
-    start = max(0.0, loud_frames[0] * FRAME_SEC - 0.3)
-    end = min(original, (loud_frames[-1] + 1) * FRAME_SEC + 0.6)
+    start, end = _bounds(db, original, trim, "One of the parts is silent.")
     entries, _heard, _repeated = _match(samples[int(start * SAMPLE_RATE) : int(end * SAMPLE_RATE)], recognizer, marker, progress)
     prefix = f"{surah}:"
     own = [e for e in entries if e["verseKey"].startswith(prefix)]
@@ -302,7 +317,9 @@ def _part(path: str, surah: int, recognizer: Any, marker: Any, progress: Callabl
     return {"path": path, "start": start, "end": end, "entries": own, "first": min(numbers) if numbers else None, "last": max(numbers) if numbers else None}
 
 
-def run_join(paths: list[str], surah: int, put_url: str, recognizer: Any, marker: Any, progress: Callable[[str], None]) -> dict[str, Any]:
+def run_join(
+    paths: list[str], surah: int, put_url: str, recognizer: Any, marker: Any, progress: Callable[[str], None], trims: list[Trim] | None = None
+) -> dict[str, Any]:
     """
     Parts of one surah recorded separately, made one: put in the order of the ayat they hold, an ayah
     recited at the end of one part and again at the start of the next kept once (the later part is cut
@@ -311,7 +328,8 @@ def run_join(paths: list[str], surah: int, put_url: str, recognizer: Any, marker
     """
     parts = []
     for n, path in enumerate(paths):
-        parts.append(_part(path, surah, recognizer, marker, lambda step, n=n: progress(f"Part {n + 1} of {len(paths)}: {step.lower()}")))
+        trim = trims[n] if trims and n < len(trims) else None
+        parts.append(_part(path, surah, recognizer, marker, lambda step, n=n: progress(f"Part {n + 1} of {len(paths)}: {step.lower()}"), trim))
     unknown = [n + 1 for n, p in enumerate(parts) if p["first"] is None]
     if unknown:
         raise ValueError(f"Part {', '.join(map(str, unknown))} does not sound like surah {surah}.")

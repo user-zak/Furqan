@@ -233,7 +233,9 @@ export default function ListenScreen() {
       .filter((r): r is Reciter => Boolean(r))
     if (kept.length) return kept
     const mine = locals.country ? locals.reciters.filter((r) => r.country === locals.country) : locals.reciters
-    return mine.slice(0, 5)
+    // No one verified from the viewer's country yet: the row still shows the verified qaris there are,
+    // so it, and its "All reciters", never vanish while any exist.
+    return (mine.length ? mine : locals.reciters).slice(0, 5)
   }, [favoriteIds, locals])
 
   const selectReciter = useCallback((id: string) => {

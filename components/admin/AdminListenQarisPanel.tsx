@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
-import { AlertTriangle, BadgeCheck, Check, ChevronLeft, Loader2, Play, Plus, Trash2, Upload, X } from 'lucide-react'
+import { AlertTriangle, BadgeCheck, Check, ChevronLeft, Loader2, MapPin, Play, Plus, Scissors, Trash2, Upload, X } from 'lucide-react'
 import AvatarCropper from '@/components/qari/AvatarCropper'
 import { cn } from '@/lib/cn'
 import type { AdminListenReciter, AdminListenSurah } from '@/lib/listen-qaris-server'
@@ -59,13 +59,106 @@ interface QueuedFile {
   surah: number | null
   progress: number | null
   error?: string
+  /** The part to keep, in seconds; an end of 0 is the file's end. */
+  trim?: [number, number]
+  trimOpen?: boolean
+}
+
+function clock(seconds: number): string {
+  const s = Math.max(0, Math.round(seconds))
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  const rest = String(s % 60).padStart(2, '0')
+  return h ? `${h}:${String(m).padStart(2, '0')}:${rest}` : `${m}:${rest}`
+}
+
+/**
+ * Keeping only part of a file before it is sent: play it, and set where the recitation starts and
+ * ends (sliders, or "Start here" / "End here" while it plays). Nothing is cut on the phone; the
+ * check keeps only that part.
+ */
+function TrimEditor({ file, trim, onChange }: { file: File; trim?: [number, number]; onChange: (trim: [number, number] | undefined) => void }) {
+  const url = useMemo(() => URL.createObjectURL(file), [file])
+  useEffect(() => () => URL.revokeObjectURL(url), [url])
+  const audio = useRef<HTMLAudioElement>(null)
+  const [duration, setDuration] = useState(0)
+  const [now, setNow] = useState(0)
+  const start = trim?.[0] ?? 0
+  const end = trim && trim[1] > 0 ? trim[1] : duration
+  const set = (nextStart: number, nextEnd: number) => {
+    const s = Math.max(0, Math.min(nextStart, duration))
+    const e = Math.max(s + 1, Math.min(nextEnd, duration))
+    onChange(s <= 0.05 && e >= duration - 0.05 ? undefined : [Math.round(s * 10) / 10, e >= duration - 0.05 ? 0 : Math.round(e * 10) / 10])
+  }
+  // "Play kept part" stops at the end mark.
+  useEffect(() => {
+    const el = audio.current
+    if (!el) return
+    const tick = () => {
+      setNow(el.currentTime)
+      if (end && el.currentTime >= end && !el.paused) el.pause()
+    }
+    el.addEventListener('timeupdate', tick)
+    return () => el.removeEventListener('timeupdate', tick)
+  }, [end])
+
+  return (
+    <div className="mt-2 w-full rounded-lg bg-[var(--app-surface)] p-3">
+      <audio ref={audio} src={url} controls preload="metadata" className="w-full" onLoadedMetadata={(e) => setDuration(e.currentTarget.duration || 0)} />
+      {duration ? (
+        <div className="mt-3 space-y-2 text-xs text-[var(--home-muted)]">
+          <label className="flex items-center gap-2">
+            <span className="w-10 font-semibold text-[var(--home-heading)]">Start</span>
+            <input type="range" min={0} max={duration} step={0.1} value={start} onChange={(e) => set(Number(e.target.value), end)} className="min-w-0 flex-1" />
+            <span className="w-14 text-right tabular-nums">{clock(start)}</span>
+          </label>
+          <label className="flex items-center gap-2">
+            <span className="w-10 font-semibold text-[var(--home-heading)]">End</span>
+            <input type="range" min={0} max={duration} step={0.1} value={end} onChange={(e) => set(start, Number(e.target.value))} className="min-w-0 flex-1" />
+            <span className="w-14 text-right tabular-nums">{clock(end)}</span>
+          </label>
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            <button type="button" className={secondary} onClick={() => set(audio.current?.currentTime ?? 0, end)}>
+              Start here ({clock(now)})
+            </button>
+            <button type="button" className={secondary} onClick={() => set(start, audio.current?.currentTime ?? duration)}>
+              End here ({clock(now)})
+            </button>
+            <button
+              type="button"
+              className={secondary}
+              onClick={() => {
+                const el = audio.current
+                if (!el) return
+                el.currentTime = start
+                void el.play().catch(() => {})
+              }}
+            >
+              <Play className="h-3.5 w-3.5" /> Play kept part
+            </button>
+            {trim ? (
+              <button type="button" className={secondary} onClick={() => onChange(undefined)}>
+                Reset
+              </button>
+            ) : null}
+            <span className="ml-auto">
+              Keeping {clock(Math.max(0, end - start))} of {clock(duration)}
+            </span>
+          </div>
+        </div>
+      ) : (
+        <p className="mt-2 text-xs text-[var(--home-muted)]">Loading the file…</p>
+      )}
+    </div>
+  )
 }
 
 /** Sends one file to the speech service with the permission the server gave; resolves when it has it. */
 function sendFile(
   upload: { url: string; job: string; surah: number; putUrl: string; token: string; joinUrls?: string[] },
   files: File[],
-  onProgress: (share: number) => void
+  onProgress: (share: number) => void,
+  trims: Array<[number, number] | undefined> = []
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     const form = new FormData()
@@ -74,6 +167,8 @@ function sendFile(
     form.append('putUrl', upload.putUrl)
     form.append('token', upload.token)
     form.append('joinUrls', (upload.joinUrls ?? []).join('\n'))
+    // The part of each file to keep, if the admin trimmed it.
+    form.append('trims', JSON.stringify(files.map((_, i) => trims[i] ?? null)))
     // Several parts of one surah go together; the check joins them in the order of their ayat.
     for (const file of files) form.append('audio', file, file.name)
     const xhr = new XMLHttpRequest()
@@ -449,6 +544,14 @@ function QariDetail({
     }
   }
 
+  const setInRead = async (inRead: boolean) => {
+    try {
+      onChange(await api<AdminListenReciter>(`/api/admin/listen-qaris/${reciter.id}`, json({ inRead }, 'PATCH')))
+    } catch (err) {
+      onError(err instanceof Error ? err.message : 'Could not change that.')
+    }
+  }
+
   const removeQari = async () => {
     if (!window.confirm(`Delete ${reciter.name}, all ${reciter.surahs.length} uploads and their files? This cannot be undone.`)) return
     try {
@@ -469,7 +572,13 @@ function QariDetail({
    * Starts one upload of `surah` from `files` (several are parts, joined into one), adding `join`, the
    * ids of earlier uploads of it whose saved files are joined with them.
    */
-  const upload = async (surah: number, files: File[], join: string[], onProgress: (share: number) => void) => {
+  const upload = async (
+    surah: number,
+    files: File[],
+    join: string[],
+    onProgress: (share: number) => void,
+    trims: Array<[number, number] | undefined> = []
+  ) => {
     let started: { surah: AdminListenSurah; upload: Parameters<typeof sendFile>[0] } | null = null
     try {
       started = await api(
@@ -477,7 +586,7 @@ function QariDetail({
         json({ surah, fileName: files.map((f) => f.name).join(' + '), join })
       )
       onSurah(started!.surah)
-      await sendFile(started!.upload, files, onProgress)
+      await sendFile(started!.upload, files, onProgress, trims)
     } catch (err) {
       const message = err instanceof Error ? err.message : 'The upload failed.'
       if (started) {
@@ -501,7 +610,13 @@ function QariDetail({
       const update = (patch: Partial<QueuedFile>) => setQueue((q) => q.map((x) => (keys.has(x.key) ? { ...x, ...patch } : x)))
       update({ progress: 0, error: undefined })
       try {
-        await upload(surah, items.map((i) => i.file), [], (share) => update({ progress: share }))
+        await upload(
+          surah,
+          items.map((i) => i.file),
+          [],
+          (share) => update({ progress: share }),
+          items.map((i) => i.trim)
+        )
         setQueue((q) => q.filter((x) => !keys.has(x.key)))
       } catch (err) {
         update({ progress: null, error: err instanceof Error ? err.message : 'The upload failed.' })
@@ -575,6 +690,15 @@ function QariDetail({
               title={!reciter.published && approvedCount === 0 ? 'Approve a surah first' : undefined}
             >
               {reciter.published ? 'Hide from Listen' : 'Show in Listen'}
+            </button>
+            <button
+              type="button"
+              className={reciter.inRead ? secondary : cn(primary, 'py-2 text-xs')}
+              onClick={() => void setInRead(!reciter.inRead)}
+              disabled={!reciter.inRead && !reciter.published}
+              title={!reciter.inRead && !reciter.published ? 'Show them in Listen first' : 'Offer them in Read; surahs they have not recorded use the default reciter'}
+            >
+              {reciter.inRead ? 'Hide from Read' : 'Show in Read'}
             </button>
             <button type="button" className={cn(secondary, 'text-red-600 dark:text-red-400')} onClick={() => void removeQari()} aria-label="Delete qari">
               <Trash2 className="h-4 w-4" />
@@ -650,6 +774,16 @@ function QariDetail({
                       </option>
                     ))}
                   </select>
+                  {item.progress === null ? (
+                    <button
+                      type="button"
+                      className={cn(secondary, item.trim && 'border-[var(--home-sage-deep)] text-[var(--home-sage-deep)]')}
+                      onClick={() => setQueue((q) => q.map((x) => (x.key === item.key ? { ...x, trimOpen: !x.trimOpen } : x)))}
+                    >
+                      <Scissors className="h-3.5 w-3.5" />
+                      {item.trim ? `${clock(item.trim[0])}–${item.trim[1] ? clock(item.trim[1]) : 'end'}` : 'Trim'}
+                    </button>
+                  ) : null}
                   {item.progress !== null ? (
                     <span className="w-16 text-right text-xs tabular-nums text-[var(--home-muted)]">{Math.round(item.progress * 100)}%</span>
                   ) : (
@@ -662,6 +796,13 @@ function QariDetail({
                       <X className="h-4 w-4" />
                     </button>
                   )}
+                  {item.trimOpen && item.progress === null ? (
+                    <TrimEditor
+                      file={item.file}
+                      trim={item.trim}
+                      onChange={(trim) => setQueue((q) => q.map((x) => (x.key === item.key ? { ...x, trim } : x)))}
+                    />
+                  ) : null}
                   {item.error ? <p className="w-full text-xs text-red-600 dark:text-red-400">{item.error}</p> : null}
                 </li>
               ))}
@@ -810,6 +951,10 @@ function SurahRow({
 
       {hasFile && open ? <audio ref={audio} src={surah.audioUrl} controls preload="none" className="mt-3 w-full" /> : null}
 
+      {hasFile && open && surah.report?.ayahs.missing.length ? (
+        <MarkMissing surah={surah} audio={audio} onChange={onChange} onError={onError} />
+      ) : null}
+
       {hasFile && missing ? (
         <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg bg-amber-500/10 px-3 py-2">
           <p className="min-w-0 flex-1 text-xs text-amber-800 dark:text-amber-200">
@@ -945,6 +1090,94 @@ function Line({ ok, label, detail, note }: { ok: boolean; label: string; detail:
         {note && !ok ? <span className="block text-[11px] text-[var(--home-muted)]">{note}</span> : null}
       </span>
       <span className="max-w-[60%] text-right text-xs text-[var(--home-muted)]">{detail}</span>
+    </div>
+  )
+}
+
+/**
+ * Ayat the check could not find but are in the recording: play it, pause where one starts, and mark
+ * it there. Each mark must come after the ayah before it and before the one after.
+ */
+function MarkMissing({
+  surah,
+  audio,
+  onChange,
+  onError,
+}: {
+  surah: AdminListenSurah
+  audio: React.RefObject<HTMLAudioElement | null>
+  onChange: (next: AdminListenSurah | null, removeId?: string) => void
+  onError: (message: string) => void
+}) {
+  const [now, setNow] = useState(0)
+  const [busy, setBusy] = useState<number | null>(null)
+  useEffect(() => {
+    const el = audio.current
+    if (!el) return
+    const tick = () => setNow(el.currentTime)
+    el.addEventListener('timeupdate', tick)
+    el.addEventListener('seeked', tick)
+    return () => {
+      el.removeEventListener('timeupdate', tick)
+      el.removeEventListener('seeked', tick)
+    }
+  }, [audio])
+
+  const missing = surah.report?.ayahs.missing ?? []
+  const before = (ayah: number) => {
+    const keys = Object.keys(surah.timings ?? {})
+      .map((k) => Number(k.split(':')[1]))
+      .filter((n) => n < ayah)
+    const prev = keys.length ? Math.max(...keys) : null
+    return prev ? { ayah: prev, at: (surah.timings?.[`${surah.surah}:${prev}`]?.[0] ?? 0) / 1000 } : null
+  }
+
+  const mark = async (ayah: number) => {
+    setBusy(ayah)
+    try {
+      onChange(await api<AdminListenSurah>(`/api/admin/listen-qaris/surahs/${surah.id}`, json({ action: 'mark', marks: { [ayah]: audio.current?.currentTime ?? now } })))
+    } catch (err) {
+      onError(err instanceof Error ? err.message : 'Could not mark that ayah.')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  return (
+    <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
+      <p className="flex items-center gap-1.5 text-xs font-semibold text-amber-800 dark:text-amber-200">
+        <MapPin className="h-3.5 w-3.5" /> Mark the missing ayahs yourself
+      </p>
+      <p className="mt-1 text-xs leading-relaxed text-[var(--home-muted)]">
+        Play the recording above and pause where an ayah begins, then tap Mark here. Now at <span className="font-semibold tabular-nums text-[var(--home-heading)]">{clock(now)}</span>.
+      </p>
+      <ul className="mt-2 divide-y divide-[var(--home-card-border)]">
+        {missing.map((ayah) => {
+          const prev = before(ayah)
+          return (
+            <li key={ayah} className="flex flex-wrap items-center gap-2 py-2">
+              <span className="text-sm font-semibold text-[var(--home-heading)]">Ayah {ayah}</span>
+              {prev ? (
+                <button
+                  type="button"
+                  className="text-xs text-[var(--home-sage-deep)] underline-offset-2 hover:underline"
+                  onClick={() => {
+                    const el = audio.current
+                    if (!el) return
+                    el.currentTime = prev.at
+                    void el.play().catch(() => {})
+                  }}
+                >
+                  play from ayah {prev.ayah} ({clock(prev.at)})
+                </button>
+              ) : null}
+              <button type="button" className={cn(primary, 'ml-auto py-1.5 text-xs')} disabled={busy !== null} onClick={() => void mark(ayah)}>
+                {busy === ayah ? 'Saving…' : `Mark here · ${clock(now)}`}
+              </button>
+            </li>
+          )
+        })}
+      </ul>
     </div>
   )
 }

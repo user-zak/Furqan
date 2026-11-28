@@ -75,6 +75,7 @@ export interface AdminListenReciter {
   username: string | null
   photoUrl: string | null
   published: boolean
+  inRead: boolean
   surahs: AdminListenSurah[]
 }
 
@@ -108,6 +109,7 @@ export function serializeReciter(row: ListenReciter, surahs: ListenSurah[]): Adm
     username: row.username,
     photoUrl: row.photoKey ? r2PublicUrl(row.photoKey) : null,
     published: row.published,
+    inRead: row.inRead,
     surahs: surahs
       .filter((s) => s.status !== 'replaced')
       .sort((a, b) => a.surah - b.surah || b.createdAt.getTime() - a.createdAt.getTime())
@@ -244,6 +246,7 @@ export async function publicListenQaris(): Promise<PublicListenQari[]> {
       style: r.style,
       ...(r.username ? { username: r.username } : {}),
       ...(r.photoKey ? { photoUrl: r2PublicUrl(r.photoKey) } : {}),
+      ...(r.inRead ? { inRead: true } : {}),
       surahs: Object.fromEntries(own.map((s) => [String(s.surah), r2PublicUrl(s.audioKey)])),
     })
   }

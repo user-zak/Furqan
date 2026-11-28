@@ -376,6 +376,8 @@ model ListenReciter {
   photoKey  String?
   /// Shown in Listen. Off while the admin is still adding surahs.
   published Boolean  @default(false)
+  /// Also offered in Read's reciter list (pages of surahs they have not recorded use the default reciter).
+  inRead    Boolean  @default(false)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

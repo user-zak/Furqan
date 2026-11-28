@@ -48,6 +48,7 @@ export function toReciter(q: PublicListenQari): Reciter {
     city: q.city,
     username: q.username,
     local: true,
+    inRead: q.inRead === true,
   }
 }
 

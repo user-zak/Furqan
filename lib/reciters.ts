@@ -77,6 +77,8 @@ export interface Reciter {
   username?: string
   /** Set for the verified qaris the admin added, whose ayah timings come from their check. */
   local?: boolean
+  /** A verified qari the admin also offers in Read. */
+  inRead?: boolean
 }
 
 /**
@@ -1063,6 +1065,15 @@ export function onLocalRecitersChange(listener: () => void): () => void {
 /** The built-in reciters and the verified qaris together. */
 export function allReciters(): Reciter[] {
   return localReciters.length ? [...RECITERS, ...localReciters] : RECITERS
+}
+
+/**
+ * The reciter Read plays a surah in: the one chosen, unless it is a verified qari who has not
+ * recorded that surah, when the default reciter stands in for it.
+ */
+export function readPlaybackReciterId(reciterId: string, surah: number): string {
+  const reciter = getReciterById(reciterId)
+  return reciter.local && surah && !hasSurah(reciter, surah) ? DEFAULT_RECITER_ID : reciter.id
 }
 
 export function getReciterById(id: string): Reciter {

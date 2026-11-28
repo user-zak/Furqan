@@ -22,6 +22,8 @@ export interface PublicListenQari {
   style: string
   username?: string
   photoUrl?: string
+  /** Also offered in Read's reciter list. */
+  inRead?: boolean
   /** Surah number → its recording. Only approved surahs. */
   surahs: Record<string, string>
 }
@@ -56,6 +58,8 @@ export interface ListenSurahReport {
     otherSurah: { surah: number; ayahs: number } | null
   }
   output: { bytes: number; channels: number; bitrateKbps: number }
+  /** Ayat the admin placed by hand, after the check missed them. */
+  marked?: number[]
   /** When parts were joined: the ayat each part gave, in the order they were joined. */
   joinedParts?: Array<{ first: number; last: number }>
 }

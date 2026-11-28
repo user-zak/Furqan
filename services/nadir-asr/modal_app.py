@@ -6,6 +6,7 @@ The steps are in README.md, under "Or deploy to Modal".
 """
 
 import hashlib
+import json
 import hmac
 import os
 import sys
@@ -63,7 +64,7 @@ MAX_SURAH_BYTES = 400 * 1024 * 1024
     volumes={UPLOADS: uploads},
     secrets=[modal.Secret.from_name("nadir-asr-key")],
 )
-def check_surah(job: str, surah: int, put_url: str, files: int = 1, join_urls: list[str] | None = None) -> None:
+def check_surah(job: str, surah: int, put_url: str, files: int = 1, join_urls: list[str] | None = None, trims: list | None = None) -> None:
     """One surah: a single file is checked; several parts (uploaded now, or saved before) are joined first."""
     sys.path.insert(0, CODE_DIR)
     from app import marker, recognizer
@@ -82,10 +83,12 @@ def check_surah(job: str, surah: int, put_url: str, files: int = 1, join_urls: l
             _download(url, path)
             earlier.append(path)
         paths = earlier + uploaded
+        # The admin's trim for each new file; saved parts were trimmed when they were checked.
+        part_trims = [None] * len(earlier) + [tuple(t) if t else None for t in (trims or [None] * files)]
         if len(paths) == 1:
-            report = run_check(paths[0], surah, put_url, recognizer(), marker(), progress)
+            report = run_check(paths[0], surah, put_url, recognizer(), marker(), progress, part_trims[0])
         else:
-            report = run_join(paths, surah, put_url, recognizer(), marker(), progress)
+            report = run_join(paths, surah, put_url, recognizer(), marker(), progress, part_trims)
         jobs[job] = {"status": "done", "report": report, "updatedAt": time.time()}
     except Exception as err:  # noqa: BLE001 — the admin sees what went wrong
         jobs[job] = {"status": "failed", "error": str(err)[:500], "updatedAt": time.time()}
@@ -126,6 +129,7 @@ def _add_listen_routes(service) -> None:
         putUrl: str = Form(...),
         token: str = Form(...),
         joinUrls: str = Form(""),
+        trims: str = Form(""),
     ) -> dict:
         try:
             uuid.UUID(job)
@@ -148,7 +152,14 @@ def _add_listen_routes(service) -> None:
                     out.write(chunk)
         uploads.commit()
         jobs[job] = {"status": "queued", "step": "Waiting to start", "updatedAt": time.time()}
-        check_surah.spawn(job, surah, putUrl, len(audio), [u for u in joinUrls.split("\n") if u])
+        # Each file's trim as [start, end] seconds (end 0 = to the end), or null: from the admin page.
+        try:
+            parsed = json.loads(trims) if trims else []
+            kept = [[float(t[0]), float(t[1])] if isinstance(t, list) and len(t) == 2 else None for t in parsed][: len(audio)]
+        except (ValueError, TypeError):
+            kept = []
+        kept += [None] * (len(audio) - len(kept))
+        check_surah.spawn(job, surah, putUrl, len(audio), [u for u in joinUrls.split("\n") if u], kept)
         return {"job": job}
 
     @service.get("/listen/status/{job}")
